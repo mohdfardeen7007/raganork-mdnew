@@ -9,39 +9,119 @@ const {
     antiBotDB,
     antiWordDB,
     WelcomeDB,
-    GoodbyeDB
+    GoodbyeDB,
+    FilterDB
 } = require('./models');
 
-// Warning functions
 async function getWarn(jid = null, user = null, cnt) {
-    const count = parseInt(cnt);
-    const Wher = { chat: jid, user: user };
-    const Msg = await warnDB.findAll({ where: Wher });
+    if (!jid || !user) return null;
 
-    if (Msg.length < 1) return false;
-    
-    const ini = Msg.length;
-    const remain = count - ini;
-    return remain < 1 ? 0 : remain;
+    const tableInfo = await warnDB.sequelize.getQueryInterface().describeTable('warns');
+    const attributes = Object.keys(warnDB.getAttributes()).filter(attr => tableInfo[attr]);
+
+    const warnings = await warnDB.findAll({ 
+        attributes,
+        where: { chat: jid, user: user },
+        order: [['timestamp', 'DESC']]
+    });
+
+    if (!cnt) {
+        return warnings; 
+    }
+
+    const count = parseInt(cnt);
+    const currentWarns = warnings.length;
+    const remaining = count - currentWarns;
+
+    return {
+        current: currentWarns,
+        limit: count,
+        remaining: remaining > 0 ? remaining : 0,
+        exceeded: remaining <= 0,
+        warnings: warnings
+    };
 }
 
-async function setWarn(jid = null, user = null, cnt) {
-    await warnDB.create({ chat: jid, user: user });
-    return await getWarn(jid, user, cnt);
+async function setWarn(jid = null, user = null, reason = 'No reason provided', warnedBy = null) {
+    if (!jid || !user || !warnedBy) return false;
+
+    const tableInfo = await warnDB.sequelize.getQueryInterface().describeTable('warns');
+    const warnData = { 
+        chat: jid, 
+        user: user, 
+        warnedBy: warnedBy,
+        timestamp: new Date()
+    };
+
+    if (tableInfo.reason) {
+        warnData.reason = reason;
+    }
+
+    await warnDB.create(warnData);
+
+    return await getWarn(jid, user);
 }
 
 async function resetWarn(jid = null, user) {
-    const Msg = await warnDB.findAll({ where: { chat: jid, user: user } });
-    
-    if (Msg.length < 1) return false;
-    
-    for (const msg of Msg) {
-        await msg.destroy();
-    }
-    return true;
+    if (!jid || !user) return false;
+
+    const deleted = await warnDB.destroy({ 
+        where: { chat: jid, user: user } 
+    });
+
+    return deleted > 0;
 }
 
-// Anti-fake functions
+async function getWarnCount(jid = null, user = null) {
+    if (!jid || !user) return 0;
+
+    return await warnDB.count({ 
+        where: { chat: jid, user: user } 
+    });
+}
+
+async function decrementWarn(jid = null, user = null) {
+    if (!jid || !user) return false;
+
+    const warnings = await warnDB.findAll({ 
+        where: { chat: jid, user: user },
+        order: [['timestamp', 'DESC']],
+        limit: 1
+    });
+
+    if (warnings.length === 0) return false;
+
+    const deleted = await warnDB.destroy({ 
+        where: { id: warnings[0].id } 
+    });
+
+    return deleted > 0;
+}
+
+async function getAllWarns(jid = null) {
+    if (!jid) return [];
+
+    const tableInfo = await warnDB.sequelize.getQueryInterface().describeTable('warns');
+    const attributes = Object.keys(warnDB.getAttributes()).filter(attr => tableInfo[attr]);
+
+    const { Op } = require('sequelize');
+    const warnings = await warnDB.findAll({
+        attributes,
+        where: { chat: jid },
+        order: [['timestamp', 'DESC']]
+    });
+
+    const groupedWarnings = {};
+    warnings.forEach(warn => {
+        if (!groupedWarnings[warn.user]) {
+            groupedWarnings[warn.user] = [];
+        }
+        groupedWarnings[warn.user].push(warn);
+    });
+
+    return groupedWarnings;
+}
+
 async function getAntifake() {
     return await FakeDB.findAll();
 }
@@ -58,7 +138,6 @@ async function resetAntifake() {
     return await FakeDB.destroy({ where: {}, truncate: true });
 }
 
-// Anti-link functions
 async function getAntilink() {
     return await antilinkDB.findAll();
 }
@@ -75,7 +154,6 @@ async function resetAntilink() {
     return await antilinkDB.destroy({ where: {}, truncate: true });
 }
 
-// Anti-spam functions
 async function getAntiSpam() {
     return await antiSpamDB.findAll();
 }
@@ -92,7 +170,6 @@ async function resetAntiSpam() {
     return await antiSpamDB.destroy({ where: {}, truncate: true });
 }
 
-// PDM functions
 async function getPdm() {
     return await PDMDB.findAll();
 }
@@ -109,7 +186,6 @@ async function resetPdm() {
     return await PDMDB.destroy({ where: {}, truncate: true });
 }
 
-// Anti-demote functions
 async function getAntiDemote() {
     return await antiDemote.findAll();
 }
@@ -126,7 +202,6 @@ async function resetAntiDemote() {
     return await antiDemote.destroy({ where: {}, truncate: true });
 }
 
-// Anti-promote functions
 async function getAntiPromote() {
     return await antiPromote.findAll();
 }
@@ -143,7 +218,6 @@ async function resetAntiPromote() {
     return await antiPromote.destroy({ where: {}, truncate: true });
 }
 
-// Anti-bot functions
 async function getAntiBot() {
     return await antiBotDB.findAll();
 }
@@ -160,7 +234,6 @@ async function resetAntiBot() {
     return await antiBotDB.destroy({ where: {}, truncate: true });
 }
 
-// Anti-word functions
 async function getAntiWord() {
     return await antiWordDB.findAll();
 }
@@ -177,7 +250,6 @@ async function resetAntiWord() {
     return await antiWordDB.destroy({ where: {}, truncate: true });
 }
 
-// Welcome functions
 async function getWelcome(jid = null) {
     if (jid) {
         return await WelcomeDB.findOne({ where: { jid } });
@@ -207,7 +279,6 @@ async function toggleWelcome(jid, enabled) {
     return false;
 }
 
-// Goodbye functions
 async function getGoodbye(jid = null) {
     if (jid) {
         return await GoodbyeDB.findOne({ where: { jid } });
@@ -237,7 +308,130 @@ async function toggleGoodbye(jid, enabled) {
     return false;
 }
 
-// Grouped exports
+async function getFilter(jid = null, trigger = null) {
+    const { Op } = require('sequelize');
+
+    if (trigger && jid) {
+
+        return await FilterDB.findOne({ 
+            where: { 
+                trigger: trigger,
+                [Op.or]: [
+                    { jid: jid, scope: 'chat' },
+                    { jid: null, scope: 'global' },
+                    { jid: null, scope: jid.includes('@g.us') ? 'group' : 'dm' }
+                ],
+                enabled: true 
+            }
+        });
+    } else if (jid) {
+
+        return await FilterDB.findAll({
+            where: {
+                [Op.or]: [
+                    { jid: jid, scope: 'chat' },
+                    { jid: null, scope: 'global' },
+                    { jid: null, scope: jid.includes('@g.us') ? 'group' : 'dm' }
+                ],
+                enabled: true
+            }
+        });
+    } else {
+
+        return await FilterDB.findAll();
+    }
+}
+
+async function setFilter(trigger, response, jid = null, scope = 'chat', createdBy, options = {}) {
+    const filterData = {
+        trigger,
+        response,
+        jid: scope === 'chat' ? jid : null,
+        scope,
+        enabled: true,
+        caseSensitive: options.caseSensitive || false,
+        exactMatch: options.exactMatch || false,
+        createdBy
+    };
+
+    const existing = await FilterDB.findOne({
+        where: {
+            trigger,
+            jid: filterData.jid,
+            scope
+        }
+    });
+
+    if (existing) {
+        await existing.update(filterData);
+        return existing;
+    }
+
+    return await FilterDB.create(filterData);
+}
+
+async function delFilter(trigger, jid = null, scope = 'chat') {
+    return await FilterDB.destroy({
+        where: {
+            trigger,
+            jid: scope === 'chat' ? jid : null,
+            scope
+        }
+    });
+}
+
+async function toggleFilter(trigger, jid = null, scope = 'chat', enabled) {
+    const filter = await FilterDB.findOne({
+        where: {
+            trigger,
+            jid: scope === 'chat' ? jid : null,
+            scope
+        }
+    });
+
+    if (filter) {
+        await filter.update({ enabled });
+        return filter;
+    }
+    return false;
+}
+
+async function getFiltersByScope(scope, jid = null) {
+    const whereCondition = { scope, enabled: true };
+    if (scope === 'chat' && jid) {
+        whereCondition.jid = jid;
+    } else if (scope !== 'chat') {
+        whereCondition.jid = null;
+    }
+
+    return await FilterDB.findAll({ where: whereCondition });
+}
+
+async function checkFilterMatch(text, jid) {
+    if (!text) return null;
+
+    const filters = await getFilter(jid);
+
+    for (const filter of filters) {
+        const trigger = filter.caseSensitive ? filter.trigger : filter.trigger.toLowerCase();
+        const textToCheck = filter.caseSensitive ? text : text.toLowerCase();
+
+        let isMatch = false;
+
+        if (filter.exactMatch) {
+            isMatch = textToCheck === trigger;
+        } else {
+            isMatch = textToCheck.includes(trigger);
+        }
+
+        if (isMatch) {
+            return filter;
+        }
+    }
+
+    return null;
+}
+
 const antilink = { set: setAntilink, get: getAntilink, delete: delAntilink, reset: resetAntilink };
 const antiword = { set: setAntiWord, get: getAntiWord, delete: delAntiWord, reset: resetAntiWord };
 const antifake = { set: setAntifake, get: getAntifake, delete: delAntifake, reset: resetAntifake };
@@ -248,10 +442,18 @@ const antibot = { set: setAntiBot, get: getAntiBot, delete: delAntiBot, reset: r
 const pdm = { set: setPdm, get: getPdm, delete: delPdm, reset: resetPdm };
 const welcome = { set: setWelcome, get: getWelcome, delete: delWelcome, toggle: toggleWelcome };
 const goodbye = { set: setGoodbye, get: getGoodbye, delete: delGoodbye, toggle: toggleGoodbye };
+const filter = { 
+    set: setFilter, 
+    get: getFilter, 
+    delete: delFilter, 
+    toggle: toggleFilter, 
+    getByScope: getFiltersByScope,
+    checkMatch: checkFilterMatch 
+};
 
 module.exports = {
-    getWarn, setWarn, resetWarn,
+    getWarn, setWarn, resetWarn, getWarnCount, decrementWarn, getAllWarns,
     antilink, antiword, antifake, 
     antipromote, antidemote, antispam,
-    antibot, pdm, welcome, goodbye
+    antibot, pdm, welcome, goodbye, filter
 };
