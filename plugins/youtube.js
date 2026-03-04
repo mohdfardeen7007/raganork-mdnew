@@ -1074,3 +1074,90 @@ Module(
     }
   }
 );
+const yts = require("yt-search");
+const ytdl = require("@distube/ytdl-core");
+const fs = require("fs");
+const ffmpeg = require("fluent-ffmpeg");
+const path = require("path");
+
+async function searchYoutube(query, limit = 5) {
+  const result = await yts(query);
+  return result.videos.slice(0, limit);
+}
+
+async function getVideoInfo(url) {
+  const info = await ytdl.getInfo(url);
+
+  const formats = info.formats.map((f) => ({
+    type: f.hasVideo ? "video" : "audio",
+    quality: f.qualityLabel,
+    size: f.contentLength
+      ? (parseInt(f.contentLength) / 1024 / 1024).toFixed(2) + " MB"
+      : null,
+  }));
+
+  return {
+    title: info.videoDetails.title,
+    videoId: info.videoDetails.videoId,
+    formats,
+  };
+}
+
+async function downloadAudio(url) {
+  const info = await ytdl.getInfo(url);
+  const title = info.videoDetails.title.replace(/[^\w\s]/gi, "");
+
+  const filePath = path.join(__dirname, `${Date.now()}.m4a`);
+
+  await new Promise((resolve, reject) => {
+    ytdl(url, { filter: "audioonly" })
+      .pipe(fs.createWriteStream(filePath))
+      .on("finish", resolve)
+      .on("error", reject);
+  });
+
+  return { path: filePath, title };
+}
+
+async function downloadVideo(url, quality = "360p") {
+  const info = await ytdl.getInfo(url);
+  const title = info.videoDetails.title.replace(/[^\w\s]/gi, "");
+
+  const format = ytdl.chooseFormat(info.formats, {
+    quality: quality,
+  });
+
+  const filePath = path.join(__dirname, `${Date.now()}.mp4`);
+
+  await new Promise((resolve, reject) => {
+    ytdl(url, { format })
+      .pipe(fs.createWriteStream(filePath))
+      .on("finish", resolve)
+      .on("error", reject);
+  });
+
+  return { path: filePath, title };
+}
+
+async function convertM4aToMp3(inputPath) {
+  const outputPath = inputPath.replace(".m4a", ".mp3");
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .toFormat("mp3")
+      .on("end", () => {
+        fs.unlinkSync(inputPath);
+        resolve(outputPath);
+      })
+      .on("error", reject)
+      .save(outputPath);
+  });
+}
+
+module.exports = {
+  searchYoutube,
+  downloadAudio,
+  downloadVideo,
+  getVideoInfo,
+  convertM4aToMp3,
+};
